@@ -1,6 +1,6 @@
 import { apiCall } from './_lib/http.js';
 
-export const config = { runtime: 'nodejs26.x', maxDuration: 60 };
+export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
