@@ -1,6 +1,6 @@
 import { launchBrowser, setupPage } from './_lib/browser.js';
 
-export const config = { runtime: 'nodejs20.x', memory: 2048, maxDuration: 60 };
+export const config = { runtime: 'nodejs26.x', memory: 2048, maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
@@ -16,7 +16,7 @@ export default async function handler(req, res) {
         'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
       locale: 'id-ID',
       timezoneId: 'Asia/Jakarta',
-      viewport: { width: 412, height: 915 }, // mobile viewport, lebih ringan
+      viewport: { width: 412, height: 915 },
     });
 
     const page = await setupPage(ctx);
