@@ -48,14 +48,6 @@ export default async function handler(req, res) {
         netLog.push({ d: 'RES', s: r.status(), u: u.slice(0, 100) });
       }
     });
-    page.on('console', msg => {
-      if (msg.type() === 'error' || msg.type() === 'warning') {
-        consoleLog.push(`[${msg.type()}] ${msg.text().slice(0, 150)}`);
-      }
-    });
-    page.on('pageerror', err => {
-      consoleLog.push(`[err] ${err.message.slice(0, 150)}`);
-    });
 
     let nonce = null;
     let taskId = null;
@@ -81,125 +73,44 @@ export default async function handler(req, res) {
     });
     await page.waitForTimeout(2500);
 
-    debug.phase = 'analyze';
-    debug.pageInfo = await page.evaluate(() => ({
-      uploadZones: Array.from(document.querySelectorAll('.el-upload')).map((el, i) => {
-        const r = el.getBoundingClientRect();
-        return {
-          i,
-          visible: el.offsetParent !== null && r.width > 0,
-          w: Math.round(r.width),
-          h: Math.round(r.height),
-        };
-      }),
-      fileInputs: Array.from(document.querySelectorAll('input[type="file"]')).map((el, i) => ({
-        i,
-        accept: (el.accept || '').slice(0, 60),
-      })),
-    }));
-
+    // ── UPLOAD FILE ──────────────────────────────────────────
+    debug.phase = 'upload';
     const buf1 = Buffer.from(img1.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const buf2 = Buffer.from(img2.replace(/^data:image\/\w+;base64,/, ''), 'base64');
 
-    const previewCount = () =>
-      page.evaluate(() => document.querySelectorAll('.el-upload-list__item').length);
-
-    async function uploadZone(idx, buf, name) {
-      const log = [];
-      const before = await previewCount();
-      const zone = page.locator('.el-upload').nth(idx);
-
-      try {
-        await zone.scrollIntoViewIfNeeded({ timeout: 2000 });
-      } catch {}
-      await page.waitForTimeout(300);
-
-      // Coba klik beberapa target dalam zona upload untuk memicu file chooser
-      const targets = [
-        { sel: '.el-upload', desc: 'zone' },
-        { sel: '.el-upload__text', desc: 'text' },
-        { sel: '.el-button', desc: 'btn' },
-        { sel: '.el-upload .el-icon', desc: 'icon' },
-      ];
-
-      for (const t of targets) {
-        try {
-          const el = zone.locator(t.sel).first();
-          if ((await el.count()) === 0) continue;
-          const [chooser] = await Promise.all([
-            page.waitForEvent('filechooser', { timeout: 2500 }),
-            el.click({ timeout: 2500, force: true }),
-          ]);
-          await chooser.setFiles({ name, mimeType: 'image/jpeg', buffer: buf });
-          log.push(`${t.desc}-ok`);
-          await page.waitForTimeout(2500);
-          const after = await previewCount();
-          if (after > before) {
-            log.push('preview-ok');
-            return { idx, before, after, method: `chooser-${t.desc}`, log };
-          }
-        } catch (e) {
-          log.push(`${t.desc}-f:${(e.message || '').slice(0, 30)}`);
-        }
-      }
-
-      // Fallback: setInputFiles langsung
-      try {
-        const input = page.locator('input[type="file"]').nth(idx);
-        await input.setInputFiles({ name, mimeType: 'image/jpeg', buffer: buf });
-        log.push('direct-ok');
-        await page.waitForTimeout(2500);
-        const after = await previewCount();
-        if (after > before) {
-          log.push('preview-ok');
-          return { idx, before, after, method: 'direct', log };
-        }
-      } catch (e) {
-        log.push(`direct-f:${(e.message || '').slice(0, 30)}`);
-      }
-
-      const after = await previewCount();
-      return { idx, before, after, method: 'failed', log };
+    const inputs = page.locator('input[type="file"]');
+    if ((await inputs.count()) >= 2) {
+      await inputs.nth(0).setInputFiles({ name: 'img1.jpg', mimeType: 'image/jpeg', buffer: buf1 });
+      await page.waitForTimeout(1000);
+      await inputs.nth(1).setInputFiles({ name: 'img2.jpg', mimeType: 'image/jpeg', buffer: buf2 });
+      await page.waitForTimeout(1500);
     }
 
-    debug.phase = 'upload';
-    const up0 = await uploadZone(0, buf1, 'img1.jpg');
-    const up1 = await uploadZone(1, buf2, 'img2.jpg');
-    debug.uploads = [up0, up1];
-
-    await page.waitForTimeout(3000);
-
-    debug.phase = 'inspect_btn';
-    debug.previewFinal = await previewCount();
-    debug.swapBtnDisabled = null;
-
-    const swapBtn = page.locator('button:has-text("Mulai Tukar Wajah")').first();
-    if ((await swapBtn.count()) === 0) {
-      return res.status(500).json({
-        ok: false,
-        error: 'Tombol "Mulai Tukar Wajah" tidak ditemukan',
-        netLog, consoleLog, debug,
-      });
+    // ── CENTANG CHECKBOX SYARAT & KETENTUAN ─────────────────
+    debug.phase = 'checkbox';
+    const checkboxes = page.locator('.el-checkbox__original');
+    if ((await checkboxes.count()) > 0) {
+      // Klik checkbox pertama (yang wajib)
+      await checkboxes.nth(0).check({ force: true });
+      await page.waitForTimeout(1000);
     }
 
-    const isDisabled = await swapBtn.isDisabled();
-    debug.swapBtnDisabled = isDisabled;
-
-    if (isDisabled) {
-      return res.status(500).json({
-        ok: false,
-        error: 'Tombol disabled setelah upload',
-        netLog, consoleLog, debug,
-      });
-    }
-
+    // ── KLIK TOMBOL MULAI ───────────────────────────────────
     debug.phase = 'click';
-    await swapBtn.click({ timeout: 10000 });
+    const swapBtn = page.locator('button:has-text("Mulai Tukar Wajah")').first();
+    
+    // Coba klik dengan force jika tombol tertutup overlay
+    try {
+      await swapBtn.click({ timeout: 5000 });
+    } catch {
+      await swapBtn.click({ force: true, timeout: 5000 });
+    }
 
+    // ── TUNGGU INTERCEPT API ────────────────────────────────
     debug.phase = 'wait_intercept';
-    const dl = Date.now() + Math.min(20000, remaining());
+    const dl = Date.now() + Math.min(25000, remaining());
     while ((!taskId || !nonce) && Date.now() < dl) {
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(500);
     }
 
     if (!taskId) {
@@ -220,7 +131,7 @@ export default async function handler(req, res) {
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    return res.status(200).json({ ok: true, taskId, nonce, keyId, netLog, consoleLog, debug });
+    return res.status(200).json({ ok: true, taskId, nonce, keyId, netLog });
   } catch (e) {
     return res.status(500).json({
       ok: false,
