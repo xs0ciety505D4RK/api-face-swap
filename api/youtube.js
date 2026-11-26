@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   if (!url) return res.status(400).json({ error: 'Parameter "url" wajib diisi' });
 
   try {
-    // 1. Ambil halaman depan untuk dapetin Cookie & Signature (_s) terbaru
+    // 1. Ambil halaman depan untuk dapetin Cookie & Signature (_s, _ts) terbaru
     const homeRes = await fetch('https://savefrom.co.id/', {
       headers: {
         'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
@@ -15,11 +15,19 @@ export default async function handler(req, res) {
     });
     const html = await homeRes.text();
     
-    // Auto-catch signature _s dari HTML (Regex)
-    // Kalau gagal nemu, pakai signature statis dari trace lu sebagai fallback
-    let _s = 'e69cd5af0515b878d933c9b89cc5b243d7a6b7f2b3a48a13d7a39d88cd419083';
-    const match = html.match(/_s\s*=\s*['"]([a-f0-9]{64})['"]/);
-    if (match) _s = match[1];
+    // Auto-catch Cookie sesi (PHPSESSID, dll)
+    const setCookies = homeRes.headers.getSetCookie?.() || [];
+    const cookieHeader = setCookies.map(c => c.split(';')[0]).join('; ');
+
+    // Auto-catch _s dan _ts dari HTML
+    let _s = 'e69cd5af0515b878d933c9b89cc5b243d7a6b7f2b3a48a13d7a39d88cd419083'; // Fallback
+    let _ts = '1793791194545'; // Fallback
+
+    const sMatch = html.match(/_s\s*=\s*['"]([a-f0-9]{64})['"]/i);
+    if (sMatch) _s = sMatch[1];
+
+    const tsMatch = html.match(/_ts\s*=\s*['"]?(\d+)['"]?/);
+    if (tsMatch) _ts = tsMatch[1];
 
     const ts = Date.now().toString();
 
@@ -27,7 +35,7 @@ export default async function handler(req, res) {
     const formData = new URLSearchParams();
     formData.append('sf_url', url);
     formData.append('ts', ts);
-    formData.append('_ts', '1793791194545'); // Static dari trace
+    formData.append('_ts', _ts); 
     formData.append('_tsc', '0');
     formData.append('_s', _s);
 
@@ -37,6 +45,7 @@ export default async function handler(req, res) {
         'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
         'origin': 'https://savefrom.co.id',
         'referer': 'https://savefrom.co.id/',
+        'cookie': cookieHeader, // <-- Sertakan cookie hasil scrape
         'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
       },
       body: formData.toString()
