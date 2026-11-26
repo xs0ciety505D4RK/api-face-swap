@@ -1,7 +1,7 @@
 import { launchBrowser, setupPage } from './_lib/browser.js';
 import { apiCall } from './_lib/http.js';
 
-export const config = { runtime: 'nodejs26.x', memory: 2048, maxDuration: 60 };
+export const config = { runtime: 'nodejs', memory: 2048, maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
