@@ -6,11 +6,16 @@
         { "key": "Access-Control-Allow-Origin", "value": "https://xs0cietylabsz.biz.id" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, PUT, DELETE, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type" },
+        { "key": "Access-Control-Max-Age", "value": "86400" },
         { "key": "Vary", "value": "Origin" }
       ]
     }
   ],
   "functions": {
-    "api/swap.js": { "memory": 3009, "maxDuration": 60 }
+    "api/swap.js": { "memory": 2048, "maxDuration": 60 },
+    "api/auto.js": { "memory": 2048, "maxDuration": 60 },
+    "api/upload.js": { "memory": 512, "maxDuration": 15 },
+    "api/status.js": { "memory": 512, "maxDuration": 60 },
+    "api/proxy.js": { "memory": 512, "maxDuration": 30 }
   }
 }
