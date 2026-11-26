@@ -3,7 +3,7 @@ import { next } from '@vercel/functions';
 const ALLOWED_ORIGIN = 'https://xs0cietylabsz.biz.id';
 
 export const config = {
-  runtime: 'nodejs26.x',
+  runtime: 'nodejs',
   matcher: '/api/:path*',
 };
 
