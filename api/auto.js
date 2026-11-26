@@ -11,8 +11,15 @@ export default async function handler(req, res) {
   const img2 = faceBase64 || imageBase64;
   if (!img1) return res.status(400).json({ error: 'imageBase64 wajib' });
 
+  const START = Date.now();
+  const BUDGET = 50000;
+  const remaining = () => Math.max(1000, BUDGET - (Date.now() - START));
+
   let browser;
+  const debug = { phase: 'init' };
+
   try {
+    debug.phase = 'launch';
     browser = await launchBrowser();
 
     const ctx =
@@ -26,6 +33,7 @@ export default async function handler(req, res) {
       }));
 
     const page = await setupPage(ctx);
+    page.setDefaultTimeout(Math.min(15000, remaining()));
 
     let nonce = null;
     let taskId = null;
@@ -44,17 +52,20 @@ export default async function handler(req, res) {
       }
     });
 
+    debug.phase = 'goto';
     await page.goto('https://aifaceswap.io/id/', {
       waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      timeout: Math.min(20000, remaining()),
     });
 
+    debug.phase = 'fill_inputs';
     const buf1 = Buffer.from(img1.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const buf2 = Buffer.from(img2.replace(/^data:image\/\w+;base64,/, ''), 'base64');
 
     const inputs = page.locator('input[type="file"]');
-    await inputs.first().waitFor({ state: 'attached', timeout: 15000 });
+    await inputs.first().waitFor({ state: 'attached', timeout: Math.min(10000, remaining()) });
     const count = await inputs.count();
+    debug.inputCount = count;
 
     for (let i = 0; i < count; i++) {
       const buf = i === 0 ? buf1 : buf2;
@@ -63,36 +74,68 @@ export default async function handler(req, res) {
         mimeType: 'image/jpeg',
         buffer: buf,
       });
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(1000);
     }
 
-    // Tunggu tombol enabled
-    await page.waitForFunction(
-      () => {
-        const btn = document.querySelector('button.el-button--primary.w-100');
-        return btn && !btn.disabled && !btn.classList.contains('is-disabled');
-      },
-      { timeout: 45000 }
+    await page.waitForTimeout(3000);
+
+    debug.phase = 'inspect_buttons';
+    debug.buttons = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('button')).map((b, i) => ({
+        i,
+        text: (b.textContent || '').trim().slice(0, 30),
+        disabled: b.disabled || b.classList.contains('is-disabled'),
+        primary: b.classList.contains('el-button--primary'),
+      }))
     );
 
-    await page.locator('button.el-button--primary.w-100').first().click({ timeout: 15000 });
+    const enabledPrimary = page.locator(
+      'button.el-button--primary:not([disabled]):not(.is-disabled)'
+    );
+    const enabledCount = await enabledPrimary.count();
+    debug.enabledPrimaryCount = enabledCount;
 
-    const dl = Date.now() + 25000;
-    while ((!taskId || !nonce) && Date.now() < dl) await page.waitForTimeout(400);
-    if (!taskId) throw new Error('task_id timeout');
+    if (enabledCount === 0) {
+      return res.status(500).json({
+        ok: false,
+        error: 'Semua tombol primary disabled. Lihat debug.buttons.',
+        debug,
+      });
+    }
+
+    const target = enabledPrimary.first();
+    debug.clickedButton = (await target.textContent())?.trim() || '';
+
+    debug.phase = 'click';
+    await target.click({ timeout: Math.min(10000, remaining()) });
+
+    debug.phase = 'wait_intercept';
+    const dl = Date.now() + Math.min(15000, remaining());
+    while ((!taskId || !nonce) && Date.now() < dl) {
+      await page.waitForTimeout(400);
+    }
+    if (!taskId) {
+      return res.status(500).json({
+        ok: false,
+        error: 'task_id timeout',
+        debug,
+        elapsed: Date.now() - START,
+      });
+    }
 
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    // Tutup browser DULU sebelum polling
+    // Tutup browser DULU — bebaskan resource
     await browser.close();
     browser = null;
 
-    const started = Date.now();
+    debug.phase = 'polling';
+    const pollStart = Date.now();
     let attempt = 0;
     let resultUrl = null;
 
-    while (Date.now() - started < maxWaitMs) {
+    while (Date.now() - pollStart < maxWaitMs) {
       const { data } = await apiCall('/api/check_status', {
         task_id: taskId,
         nonce,
@@ -109,14 +152,19 @@ export default async function handler(req, res) {
     }
 
     if (!resultUrl) {
-      return res.status(408).json({ ok: false, error: 'result timeout', taskId });
+      return res.status(408).json({ ok: false, error: 'result timeout', taskId, debug });
     }
 
     const proxyUrl = `${req.headers.origin || 'https://' + req.headers.host}/api/proxy?url=${encodeURIComponent(resultUrl)}`;
 
-    return res.status(200).json({ ok: true, resultUrl: proxyUrl, raw: resultUrl, taskId });
+    return res.status(200).json({ ok: true, resultUrl: proxyUrl, raw: resultUrl, taskId, debug });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({
+      ok: false,
+      error: e.message,
+      debug,
+      elapsed: Date.now() - START,
+    });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
