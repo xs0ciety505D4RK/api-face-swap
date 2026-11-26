@@ -24,20 +24,15 @@ export default async function handler(req, res) {
 
     const data = await r.json();
     
-    // Cek jika sudah selesai (biasanya status 3 atau ada output_url)
-    const output = data?.data?.output_url || data?.data?.result?.output_url;
+    // Cek jika job selesai & ada output
+    const output = data?.result?.output_url || data?.data?.output_url;
     
     if (output) {
       return res.status(200).json({ ok: true, resultUrl: output, raw: data });
     }
 
-    // Kalau gagal
-    if (data?.code !== 100000 && data?.code !== 200) {
-       // Kadang code 100000 = sukses request, tapi job masih pending
-       // Kalau error beneran, hentikan
-       if (data?.data?.status === 'failed' || data?.code === 400) {
-           return res.status(400).json({ ok: false, error: 'Job failed', raw: data });
-       }
+    if (data?.code !== 100000) {
+      return res.status(400).json({ ok: false, error: 'Job failed', raw: data });
     }
 
     attempt++;
