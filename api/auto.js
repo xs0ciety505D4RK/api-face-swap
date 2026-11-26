@@ -1,7 +1,7 @@
 import { launchBrowser, setupPage } from './_lib/browser.js';
 import { apiCall } from './_lib/http.js';
 
-export const config = { runtime: 'nodejs20.x', memory: 2048, maxDuration: 60 };
+export const config = { runtime: 'nodejs26.x', memory: 2048, maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
@@ -63,7 +63,7 @@ export default async function handler(req, res) {
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    // Tutup browser DULU — bebaskan 1.5 GB RAM sebelum polling
+    // Tutup browser DULU — bebas RAM sebelum polling
     await ctx.close();
     await browser.close();
     ctx = browser = null;
