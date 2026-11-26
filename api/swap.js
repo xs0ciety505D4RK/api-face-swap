@@ -36,28 +36,25 @@ export default async function handler(req, res) {
     const page = await setupPage(ctx);
     page.setDefaultTimeout(Math.min(15000, remaining()));
 
-    // ── Rekam semua network ─────────────────────────
     page.on('request', r => {
       const u = r.url();
-      if (u.includes('aifaceswap.io/api/') || u.includes('ezmaker')) {
-        netLog.push({ dir: 'REQ', m: r.method(), url: u.slice(0, 120) });
+      if (u.includes('aifaceswap.io/api/') || u.includes('ezmaker') || u.includes('aliyuncs.com')) {
+        netLog.push({ d: 'REQ', m: r.method(), u: u.slice(0, 100) });
       }
     });
-    page.on('response', async r => {
+    page.on('response', r => {
       const u = r.url();
-      if (u.includes('aifaceswap.io/api/') || u.includes('ezmaker')) {
-        netLog.push({ dir: 'RES', s: r.status(), url: u.slice(0, 120) });
+      if (u.includes('aifaceswap.io/api/') || u.includes('ezmaker') || u.includes('aliyuncs.com')) {
+        netLog.push({ d: 'RES', s: r.status(), u: u.slice(0, 100) });
       }
     });
-
-    // ── Rekam console error & page error ────────────
     page.on('console', msg => {
       if (msg.type() === 'error' || msg.type() === 'warning') {
-        consoleLog.push(`[${msg.type()}] ${msg.text().slice(0, 200)}`);
+        consoleLog.push(`[${msg.type()}] ${msg.text().slice(0, 150)}`);
       }
     });
     page.on('pageerror', err => {
-      consoleLog.push(`[pageerror] ${err.message.slice(0, 200)}`);
+      consoleLog.push(`[err] ${err.message.slice(0, 150)}`);
     });
 
     let nonce = null;
@@ -82,124 +79,156 @@ export default async function handler(req, res) {
       waitUntil: 'domcontentloaded',
       timeout: Math.min(20000, remaining()),
     });
+    await page.waitForTimeout(2500);
 
-    debug.phase = 'fill_inputs';
+    debug.phase = 'analyze';
+    debug.pageInfo = await page.evaluate(() => ({
+      uploadZones: Array.from(document.querySelectorAll('.el-upload')).map((el, i) => {
+        const r = el.getBoundingClientRect();
+        return {
+          i,
+          visible: el.offsetParent !== null && r.width > 0,
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+        };
+      }),
+      fileInputs: Array.from(document.querySelectorAll('input[type="file"]')).map((el, i) => ({
+        i,
+        accept: (el.accept || '').slice(0, 60),
+      })),
+    }));
+
     const buf1 = Buffer.from(img1.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const buf2 = Buffer.from(img2.replace(/^data:image\/\w+;base64,/, ''), 'base64');
 
-    const inputs = page.locator('input[type="file"]');
-    await inputs.first().waitFor({ state: 'attached', timeout: Math.min(10000, remaining()) });
-    const count = await inputs.count();
-    debug.inputCount = count;
+    const previewCount = () =>
+      page.evaluate(() => document.querySelectorAll('.el-upload-list__item').length);
 
-    for (let i = 0; i < count; i++) {
-      const buf = i === 0 ? buf1 : buf2;
-      await inputs.nth(i).setInputFiles({
-        name: `img${i + 1}.jpg`,
-        mimeType: 'image/jpeg',
-        buffer: buf,
-      });
-      await page.waitForTimeout(1500);
+    async function uploadZone(idx, buf, name) {
+      const log = [];
+      const before = await previewCount();
+      const zone = page.locator('.el-upload').nth(idx);
+
+      try {
+        await zone.scrollIntoViewIfNeeded({ timeout: 2000 });
+      } catch {}
+      await page.waitForTimeout(300);
+
+      // Coba klik beberapa target dalam zona upload untuk memicu file chooser
+      const targets = [
+        { sel: '.el-upload', desc: 'zone' },
+        { sel: '.el-upload__text', desc: 'text' },
+        { sel: '.el-button', desc: 'btn' },
+        { sel: '.el-upload .el-icon', desc: 'icon' },
+      ];
+
+      for (const t of targets) {
+        try {
+          const el = zone.locator(t.sel).first();
+          if ((await el.count()) === 0) continue;
+          const [chooser] = await Promise.all([
+            page.waitForEvent('filechooser', { timeout: 2500 }),
+            el.click({ timeout: 2500, force: true }),
+          ]);
+          await chooser.setFiles({ name, mimeType: 'image/jpeg', buffer: buf });
+          log.push(`${t.desc}-ok`);
+          await page.waitForTimeout(2500);
+          const after = await previewCount();
+          if (after > before) {
+            log.push('preview-ok');
+            return { idx, before, after, method: `chooser-${t.desc}`, log };
+          }
+        } catch (e) {
+          log.push(`${t.desc}-f:${(e.message || '').slice(0, 30)}`);
+        }
+      }
+
+      // Fallback: setInputFiles langsung
+      try {
+        const input = page.locator('input[type="file"]').nth(idx);
+        await input.setInputFiles({ name, mimeType: 'image/jpeg', buffer: buf });
+        log.push('direct-ok');
+        await page.waitForTimeout(2500);
+        const after = await previewCount();
+        if (after > before) {
+          log.push('preview-ok');
+          return { idx, before, after, method: 'direct', log };
+        }
+      } catch (e) {
+        log.push(`direct-f:${(e.message || '').slice(0, 30)}`);
+      }
+
+      const after = await previewCount();
+      return { idx, before, after, method: 'failed', log };
     }
 
-    // Tunggu upload benar-benar selesai: cek tidak ada request upload pending
-    await page.waitForTimeout(4000);
+    debug.phase = 'upload';
+    const up0 = await uploadZone(0, buf1, 'img1.jpg');
+    const up1 = await uploadZone(1, buf2, 'img2.jpg');
+    debug.uploads = [up0, up1];
 
-    // Cek state sebelum klik
-    debug.beforeClick = await page.evaluate(() => ({
-      url: location.href,
-      imgPreviews: document.querySelectorAll('.el-upload-list__item img, .el-image img').length,
-      toasts: Array.from(document.querySelectorAll('.el-message, .el-notification')).map(e =>
-        (e.textContent || '').trim().slice(0, 100)
-      ),
-      primaryButtons: Array.from(document.querySelectorAll('button.el-button--primary')).map(b => ({
-        text: (b.textContent || '').trim().slice(0, 30),
-        disabled: b.disabled || b.classList.contains('is-disabled'),
-      })),
-    }));
+    await page.waitForTimeout(3000);
 
-    // Cari tombol primary enabled
-    const enabledPrimary = page.locator(
-      'button.el-button--primary:not([disabled]):not(.is-disabled)'
-    );
-    const enabledCount = await enabledPrimary.count();
-    debug.enabledPrimaryCount = enabledCount;
+    debug.phase = 'inspect_btn';
+    debug.previewFinal = await previewCount();
+    debug.swapBtnDisabled = null;
 
-    if (enabledCount === 0) {
-      const shot = await page.screenshot({ fullPage: false, type: 'jpeg', quality: 40 });
+    const swapBtn = page.locator('button:has-text("Mulai Tukar Wajah")').first();
+    if ((await swapBtn.count()) === 0) {
       return res.status(500).json({
         ok: false,
-        error: 'Tidak ada tombol primary enabled',
-        debug: { ...debug, netLog, consoleLog },
-        screenshot: 'data:image/jpeg;base64,' + shot.toString('base64'),
+        error: 'Tombol "Mulai Tukar Wajah" tidak ditemukan',
+        netLog, consoleLog, debug,
       });
     }
 
-    const target = enabledPrimary.first();
-    debug.clickedButton = (await target.textContent())?.trim() || '';
+    const isDisabled = await swapBtn.isDisabled();
+    debug.swapBtnDisabled = isDisabled;
 
-    // Klik
+    if (isDisabled) {
+      return res.status(500).json({
+        ok: false,
+        error: 'Tombol disabled setelah upload',
+        netLog, consoleLog, debug,
+      });
+    }
+
     debug.phase = 'click';
-    await target.click({ timeout: Math.min(10000, remaining()) });
+    await swapBtn.click({ timeout: 10000 });
 
-    // Tunggu 5 detik, cek state setelah klik
-    await page.waitForTimeout(5000);
-
-    debug.afterClick = await page.evaluate(() => ({
-      url: location.href,
-      title: document.title,
-      toasts: Array.from(document.querySelectorAll('.el-message, .el-notification')).map(e =>
-        (e.textContent || '').trim().slice(0, 100)
-      ),
-      visibleDialogs: Array.from(document.querySelectorAll('.el-dialog')).filter(d => d.offsetParent !== null).map(d => ({
-        title: (d.querySelector('.el-dialog__title')?.textContent || '').trim().slice(0, 80),
-        body: (d.querySelector('.el-dialog__body')?.textContent || '').trim().slice(0, 300),
-        buttons: Array.from(d.querySelectorAll('button')).map(b => ({
-          text: (b.textContent || '').trim().slice(0, 30),
-          disabled: b.disabled || b.classList.contains('is-disabled'),
-        })),
-      })),
-      uploadListItems: document.querySelectorAll('.el-upload-list__item').length,
-      loadingSpinners: document.querySelectorAll('.el-loading-mask, .is-loading').length,
-    }));
-
-    // Tunggu intercept task_id
     debug.phase = 'wait_intercept';
     const dl = Date.now() + Math.min(20000, remaining());
     while ((!taskId || !nonce) && Date.now() < dl) {
       await page.waitForTimeout(400);
     }
 
-    // Screenshot kondisi akhir
-    const shot = await page.screenshot({ fullPage: false, type: 'jpeg', quality: 40 });
-    debug.screenshot = 'data:image/jpeg;base64,' + shot.toString('base64');
-
     if (!taskId) {
+      const shot = await page.screenshot({
+        fullPage: false,
+        type: 'jpeg',
+        quality: 25,
+        clip: { x: 0, y: 0, width: 412, height: 500 },
+      });
       return res.status(500).json({
         ok: false,
-        error: 'task_id tidak tertangkap',
-        debug: { ...debug, netLog, consoleLog },
+        error: 'task_id tidak tertangkap setelah klik',
+        netLog, consoleLog, debug,
+        screenshot: 'data:image/jpeg;base64,' + shot.toString('base64'),
       });
     }
 
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    return res.status(200).json({
-      ok: true,
-      taskId,
-      nonce,
-      keyId,
-      debug: { ...debug, netLog, consoleLog },
-    });
+    return res.status(200).json({ ok: true, taskId, nonce, keyId, netLog, consoleLog, debug });
   } catch (e) {
     return res.status(500).json({
       ok: false,
       error: e.message,
-      debug: { ...debug, netLog, consoleLog },
+      netLog, consoleLog, debug,
       elapsed: Date.now() - START,
     });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
-              }
+}
