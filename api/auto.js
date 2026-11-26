@@ -1,29 +1,26 @@
-import { chromium as pwChromium } from 'playwright-core';
-import chromium from '@sparticuz/chromium';
+import { launchBrowser, setupPage } from './_lib/browser.js';
 import { apiCall } from './_lib/http.js';
 
-export const config = { runtime: 'nodejs20.x', memory: 3009, maxDuration: 60 };
+export const config = { runtime: 'nodejs20.x', memory: 2048, maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
-  const { imageBase64, proxy = true, maxWaitMs = 45000 } = req.body || {};
+  const { imageBase64, maxWaitMs = 45000 } = req.body || {};
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 wajib' });
 
   let browser, ctx;
   try {
-    browser = await pwChromium.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    });
+    browser = await launchBrowser();
     ctx = await browser.newContext({
       userAgent:
         'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
       locale: 'id-ID',
       timezoneId: 'Asia/Jakarta',
+      viewport: { width: 412, height: 915 },
     });
-    const page = await ctx.newPage();
+
+    const page = await setupPage(ctx);
 
     let nonce = null;
     let taskId = null;
@@ -44,34 +41,33 @@ export default async function handler(req, res) {
 
     await page.goto('https://aifaceswap.io/id/', {
       waitUntil: 'domcontentloaded',
-      timeout: 45000,
+      timeout: 30000,
     });
 
     const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     await (
-      await page.waitForSelector('input[type="file"]', { timeout: 20000 })
+      await page.waitForSelector('input[type="file"]', { timeout: 15000 })
     ).setInputFiles({ name: 'x.jpg', mimeType: 'image/jpeg', buffer: buf });
 
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(2000);
 
     await page
       .locator('button:has-text("Swap"), button:has-text("Generate"), button:has-text("Tukar")')
       .first()
-      .click({ timeout: 15000 });
+      .click({ timeout: 10000 });
 
-    const dl = Date.now() + 40000;
+    const dl = Date.now() + 20000;
     while ((!taskId || !nonce) && Date.now() < dl) await page.waitForTimeout(400);
     if (!taskId) throw new Error('task_id timeout');
 
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    // Browser selesai — tutup dulu
+    // Tutup browser DULU — bebaskan 1.5 GB RAM sebelum polling
     await ctx.close();
     await browser.close();
     ctx = browser = null;
 
-    // Polling pure-fetch
     const started = Date.now();
     let attempt = 0;
     let resultUrl = null;
@@ -96,16 +92,9 @@ export default async function handler(req, res) {
       return res.status(408).json({ ok: false, error: 'result timeout', taskId });
     }
 
-    const finalUrl = proxy
-      ? `${req.headers.origin || 'https://' + req.headers.host}/api/proxy?url=${encodeURIComponent(resultUrl)}`
-      : resultUrl;
+    const proxyUrl = `${req.headers.origin || 'https://' + req.headers.host}/api/proxy?url=${encodeURIComponent(resultUrl)}`;
 
-    return res.status(200).json({
-      ok: true,
-      resultUrl: finalUrl,
-      raw: resultUrl,
-      taskId,
-    });
+    return res.status(200).json({ ok: true, resultUrl: proxyUrl, raw: resultUrl, taskId });
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
   } finally {
