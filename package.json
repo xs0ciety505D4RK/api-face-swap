@@ -1,0 +1,11 @@
+{
+  "name": "aifaceswap-secure",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": { "node": "20.x" },
+  "dependencies": {
+    "@vercel/functions": "^1.6.0",
+    "playwright-core": "^1.48.0",
+    "@sparticuz/chromium": "^131.0.0"
+  }
+}
