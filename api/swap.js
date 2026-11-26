@@ -5,8 +5,10 @@ export const config = { runtime: 'nodejs', memory: 1024, maxDuration: 60 };
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
-  const { imageBase64 } = req.body || {};
-  if (!imageBase64) return res.status(400).json({ error: 'imageBase64 wajib' });
+  const { imageBase64, faceBase64 } = req.body || {};
+  const img1 = imageBase64 || faceBase64;
+  const img2 = faceBase64 || imageBase64;
+  if (!img1) return res.status(400).json({ error: 'imageBase64 wajib' });
 
   let browser;
   try {
@@ -47,21 +49,38 @@ export default async function handler(req, res) {
       timeout: 30000,
     });
 
-    const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    const fileInput = page.locator('input[type="file"]').first();
-    await fileInput.waitFor({ state: 'attached', timeout: 15000 });
-    await fileInput.setInputFiles({ name: 'x.jpg', mimeType: 'image/jpeg', buffer: buf });
+    const buf1 = Buffer.from(img1.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+    const buf2 = Buffer.from(img2.replace(/^data:image\/\w+;base64,/, ''), 'base64');
 
-    await page.waitForTimeout(2000);
+    // Isi SEMUA file input yang ada (biasanya 2: target + face)
+    const inputs = page.locator('input[type="file"]');
+    await inputs.first().waitFor({ state: 'attached', timeout: 15000 });
+    const count = await inputs.count();
 
-    const btn = page
-      .locator(
-        'button:has-text("Swap"), button:has-text("Generate"), button:has-text("Tukar"), button:has-text("Ganti")'
-      )
-      .first();
-    await btn.click({ timeout: 10000 });
+    for (let i = 0; i < count; i++) {
+      const buf = i === 0 ? buf1 : buf2;
+      await inputs.nth(i).setInputFiles({
+        name: `img${i + 1}.jpg`,
+        mimeType: 'image/jpeg',
+        buffer: buf,
+      });
+      await page.waitForTimeout(800);
+    }
 
-    const deadline = Date.now() + 20000;
+    // Tunggu tombol primary jadi ENABLED (bukan disabled)
+    await page.waitForFunction(
+      () => {
+        const btn = document.querySelector('button.el-button--primary.w-100');
+        return btn && !btn.disabled && !btn.classList.contains('is-disabled');
+      },
+      { timeout: 45000 }
+    );
+
+    // Klik tombol
+    await page.locator('button.el-button--primary.w-100').first().click({ timeout: 15000 });
+
+    // Tunggu intercept task_id + nonce
+    const deadline = Date.now() + 25000;
     while ((!taskId || !nonce) && Date.now() < deadline) {
       await page.waitForTimeout(400);
     }
