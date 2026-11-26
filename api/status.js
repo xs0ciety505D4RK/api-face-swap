@@ -21,14 +21,30 @@ export default async function handler(req, res) {
 
     const data = await r.json();
     
-    // Cek jika selesai
-    const output = data?.result?.output_url || data?.result?.url;
-    if (output) {
+    // --- Ekstrak URL dengan aman ---
+    let output = null;
+    if (data?.result) {
+      if (typeof data.result === 'string' && data.result.startsWith('http')) {
+        output = data.result;
+      } else if (Array.isArray(data.result)) {
+        output = data.result[0]?.url || data.result[0];
+      } else {
+        output = data.result.output_url || data.result.url || data.result.image_url;
+      }
+    }
+
+    // Jika URL hasil sudah ada
+    if (output && typeof output === 'string') {
       return res.status(200).json({ ok: true, resultUrl: output, raw: data });
     }
 
-    // Masih diproses (300006)
-    if (data?.code === 300006) {
+    // Jika masih diproses (kode 300006 atau result kosong)
+    if (data?.code === 300006 || !data?.result) {
+      return res.status(200).json({ ok: false, pending: true, raw: data });
+    }
+    
+    // Kadang kode 100000 tapi output belum siap
+    if (data?.code === 100000) {
       return res.status(200).json({ ok: false, pending: true, raw: data });
     }
 
