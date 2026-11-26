@@ -11,17 +11,18 @@ export default async function handler(req, res) {
   if (!img1) return res.status(400).json({ error: 'imageBase64 wajib' });
 
   const START = Date.now();
-  const BUDGET = 50000; // total maksimal 50 detik, sisakan 10s buffer untuk Vercel
+  const BUDGET = 50000;
   const remaining = () => Math.max(1000, BUDGET - (Date.now() - START));
 
   let browser;
   const debug = { phase: 'init' };
+  const netLog = [];
+  const consoleLog = [];
 
   try {
     debug.phase = 'launch';
     browser = await launchBrowser();
 
-    debug.phase = 'context';
     const ctx =
       browser.contexts()[0] ||
       (await browser.newContext({
@@ -35,9 +36,32 @@ export default async function handler(req, res) {
     const page = await setupPage(ctx);
     page.setDefaultTimeout(Math.min(15000, remaining()));
 
+    // ── Rekam semua network ─────────────────────────
+    page.on('request', r => {
+      const u = r.url();
+      if (u.includes('aifaceswap.io/api/') || u.includes('ezmaker')) {
+        netLog.push({ dir: 'REQ', m: r.method(), url: u.slice(0, 120) });
+      }
+    });
+    page.on('response', async r => {
+      const u = r.url();
+      if (u.includes('aifaceswap.io/api/') || u.includes('ezmaker')) {
+        netLog.push({ dir: 'RES', s: r.status(), url: u.slice(0, 120) });
+      }
+    });
+
+    // ── Rekam console error & page error ────────────
+    page.on('console', msg => {
+      if (msg.type() === 'error' || msg.type() === 'warning') {
+        consoleLog.push(`[${msg.type()}] ${msg.text().slice(0, 200)}`);
+      }
+    });
+    page.on('pageerror', err => {
+      consoleLog.push(`[pageerror] ${err.message.slice(0, 200)}`);
+    });
+
     let nonce = null;
     let taskId = null;
-
     page.on('request', r => {
       if (r.url().endsWith('/api/generate_face_v1')) {
         const h = r.headers();
@@ -75,24 +99,26 @@ export default async function handler(req, res) {
         mimeType: 'image/jpeg',
         buffer: buf,
       });
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1500);
     }
 
-    // Beri waktu upload ke server selesai
-    await page.waitForTimeout(3000);
+    // Tunggu upload benar-benar selesai: cek tidak ada request upload pending
+    await page.waitForTimeout(4000);
 
-    // Ambil semua info tombol untuk debug
-    debug.phase = 'inspect_buttons';
-    debug.buttons = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('button')).map((b, i) => ({
-        i,
+    // Cek state sebelum klik
+    debug.beforeClick = await page.evaluate(() => ({
+      url: location.href,
+      imgPreviews: document.querySelectorAll('.el-upload-list__item img, .el-image img').length,
+      toasts: Array.from(document.querySelectorAll('.el-message, .el-notification')).map(e =>
+        (e.textContent || '').trim().slice(0, 100)
+      ),
+      primaryButtons: Array.from(document.querySelectorAll('button.el-button--primary')).map(b => ({
         text: (b.textContent || '').trim().slice(0, 30),
         disabled: b.disabled || b.classList.contains('is-disabled'),
-        primary: b.classList.contains('el-button--primary'),
-      }))
-    );
+      })),
+    }));
 
-    // Cari tombol enabled yang paling mungkin = tombol submit
+    // Cari tombol primary enabled
     const enabledPrimary = page.locator(
       'button.el-button--primary:not([disabled]):not(.is-disabled)'
     );
@@ -100,47 +126,80 @@ export default async function handler(req, res) {
     debug.enabledPrimaryCount = enabledCount;
 
     if (enabledCount === 0) {
+      const shot = await page.screenshot({ fullPage: false, type: 'jpeg', quality: 40 });
       return res.status(500).json({
         ok: false,
-        error: 'Semua tombol primary disabled setelah upload. Lihat debug.buttons.',
-        debug,
+        error: 'Tidak ada tombol primary enabled',
+        debug: { ...debug, netLog, consoleLog },
+        screenshot: 'data:image/jpeg;base64,' + shot.toString('base64'),
       });
     }
 
-    // Pilih tombol pertama yang enabled
     const target = enabledPrimary.first();
-    const btnText = (await target.textContent())?.trim() || '';
-    debug.clickedButton = btnText;
+    debug.clickedButton = (await target.textContent())?.trim() || '';
 
+    // Klik
     debug.phase = 'click';
     await target.click({ timeout: Math.min(10000, remaining()) });
 
+    // Tunggu 5 detik, cek state setelah klik
+    await page.waitForTimeout(5000);
+
+    debug.afterClick = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      toasts: Array.from(document.querySelectorAll('.el-message, .el-notification')).map(e =>
+        (e.textContent || '').trim().slice(0, 100)
+      ),
+      visibleDialogs: Array.from(document.querySelectorAll('.el-dialog')).filter(d => d.offsetParent !== null).map(d => ({
+        title: (d.querySelector('.el-dialog__title')?.textContent || '').trim().slice(0, 80),
+        body: (d.querySelector('.el-dialog__body')?.textContent || '').trim().slice(0, 300),
+        buttons: Array.from(d.querySelectorAll('button')).map(b => ({
+          text: (b.textContent || '').trim().slice(0, 30),
+          disabled: b.disabled || b.classList.contains('is-disabled'),
+        })),
+      })),
+      uploadListItems: document.querySelectorAll('.el-upload-list__item').length,
+      loadingSpinners: document.querySelectorAll('.el-loading-mask, .is-loading').length,
+    }));
+
+    // Tunggu intercept task_id
     debug.phase = 'wait_intercept';
-    const dl = Date.now() + Math.min(15000, remaining());
+    const dl = Date.now() + Math.min(20000, remaining());
     while ((!taskId || !nonce) && Date.now() < dl) {
       await page.waitForTimeout(400);
     }
 
+    // Screenshot kondisi akhir
+    const shot = await page.screenshot({ fullPage: false, type: 'jpeg', quality: 40 });
+    debug.screenshot = 'data:image/jpeg;base64,' + shot.toString('base64');
+
     if (!taskId) {
       return res.status(500).json({
         ok: false,
-        error: 'task_id tidak tertangkap — klik berhasil tapi API tidak terpanggil',
-        debug,
+        error: 'task_id tidak tertangkap',
+        debug: { ...debug, netLog, consoleLog },
       });
     }
 
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    return res.status(200).json({ ok: true, taskId, nonce, keyId, debug });
+    return res.status(200).json({
+      ok: true,
+      taskId,
+      nonce,
+      keyId,
+      debug: { ...debug, netLog, consoleLog },
+    });
   } catch (e) {
     return res.status(500).json({
       ok: false,
       error: e.message,
-      debug,
+      debug: { ...debug, netLog, consoleLog },
       elapsed: Date.now() - START,
     });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
-}
+              }
