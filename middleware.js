@@ -3,7 +3,7 @@ import { next } from '@vercel/functions';
 const ALLOWED_ORIGIN = 'https://xs0cietylabsz.biz.id';
 
 export const config = {
-  runtime: 'nodejs20.x',
+  runtime: 'nodejs26.x',
   matcher: '/api/:path*',
 };
 
@@ -33,7 +33,7 @@ export default function middleware(request) {
     return new Response('Forbidden', { status: 403 });
   }
 
-  // ── 3. Kalau Origin kosong (curl/GET img), cek Referer ──
+  // ── 3. Kalau Origin kosong, cek Referer ─────────────
   if (!origin) {
     if (!referer) {
       return new Response('Forbidden', { status: 403 });
