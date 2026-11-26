@@ -88,10 +88,37 @@ export default async function handler(req, res) {
 
     // ── CENTANG CHECKBOX SYARAT & KETENTUAN ─────────────────
     debug.phase = 'checkbox';
-    const checkboxes = page.locator('.el-checkbox__original');
+    const checkboxes = page.locator('.el-checkbox');
     if ((await checkboxes.count()) > 0) {
-      // Klik checkbox pertama (yang wajib)
-      await checkboxes.nth(0).check({ force: true });
+      // Klik elemen visual kotak centangnya langsung
+      const inner = checkboxes.nth(0).locator('.el-checkbox__inner');
+      if ((await inner.count()) > 0) {
+        await inner.click({ force: true });
+      } else {
+        await checkboxes.nth(0).click({ force: true });
+      }
+      await page.waitForTimeout(1000);
+    }
+
+    // Cek apakah checkbox sudah tercentang (class is-checked)
+    debug.checkboxChecked = await page.evaluate(() => {
+      const cb = document.querySelector('.el-checkbox');
+      return cb ? cb.classList.contains('is-checked') : false;
+    });
+
+    // Kalau masih gagal, paksa lewat JS (dispatch event Vue)
+    if (!debug.checkboxChecked) {
+      await page.evaluate(() => {
+        const cb = document.querySelector('.el-checkbox');
+        if (cb) {
+          const input = cb.querySelector('input[type="checkbox"]');
+          if (input && !input.checked) {
+            input.checked = true;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          cb.classList.add('is-checked');
+        }
+      });
       await page.waitForTimeout(1000);
     }
 
@@ -99,7 +126,6 @@ export default async function handler(req, res) {
     debug.phase = 'click';
     const swapBtn = page.locator('button:has-text("Mulai Tukar Wajah")').first();
     
-    // Coba klik dengan force jika tombol tertutup overlay
     try {
       await swapBtn.click({ timeout: 5000 });
     } catch {
