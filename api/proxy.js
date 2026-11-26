@@ -1,4 +1,4 @@
-export const config = { runtime: 'nodejs26.x' };
+export const config = { runtime: 'nodejs', memory: 512, maxDuration: 30 };
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).send('GET only');
