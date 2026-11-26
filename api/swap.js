@@ -12,7 +12,6 @@ export default async function handler(req, res) {
   try {
     browser = await launchBrowser();
 
-    // connectOverCDP sudah punya context default — pakai itu
     const ctx =
       browser.contexts()[0] ||
       (await browser.newContext({
@@ -49,7 +48,8 @@ export default async function handler(req, res) {
     });
 
     const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    const fileInput = await page.waitForSelector('input[type="file"]', { timeout: 15000 });
+    const fileInput = page.locator('input[type="file"]').first();
+    await fileInput.waitFor({ state: 'attached', timeout: 15000 });
     await fileInput.setInputFiles({ name: 'x.jpg', mimeType: 'image/jpeg', buffer: buf });
 
     await page.waitForTimeout(2000);
