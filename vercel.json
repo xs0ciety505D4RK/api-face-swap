@@ -12,8 +12,8 @@
     }
   ],
   "functions": {
-    "api/swap.js": { "memory": 2048, "maxDuration": 60 },
-    "api/auto.js": { "memory": 2048, "maxDuration": 60 },
+    "api/swap.js": { "memory": 1024, "maxDuration": 60 },
+    "api/auto.js": { "memory": 1024, "maxDuration": 60 },
     "api/upload.js": { "memory": 512, "maxDuration": 15 },
     "api/status.js": { "memory": 512, "maxDuration": 60 },
     "api/proxy.js": { "memory": 512, "maxDuration": 30 }
