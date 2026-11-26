@@ -6,8 +6,10 @@ export const config = { runtime: 'nodejs', memory: 1024, maxDuration: 60 };
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
-  const { imageBase64, maxWaitMs = 45000 } = req.body || {};
-  if (!imageBase64) return res.status(400).json({ error: 'imageBase64 wajib' });
+  const { imageBase64, faceBase64, maxWaitMs = 45000 } = req.body || {};
+  const img1 = imageBase64 || faceBase64;
+  const img2 = faceBase64 || imageBase64;
+  if (!img1) return res.status(400).json({ error: 'imageBase64 wajib' });
 
   let browser;
   try {
@@ -47,30 +49,45 @@ export default async function handler(req, res) {
       timeout: 30000,
     });
 
-    const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    const fileInput = page.locator('input[type="file"]').first();
-    await fileInput.waitFor({ state: 'attached', timeout: 15000 });
-    await fileInput.setInputFiles({ name: 'x.jpg', mimeType: 'image/jpeg', buffer: buf });
+    const buf1 = Buffer.from(img1.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+    const buf2 = Buffer.from(img2.replace(/^data:image\/\w+;base64,/, ''), 'base64');
 
-    await page.waitForTimeout(2000);
+    const inputs = page.locator('input[type="file"]');
+    await inputs.first().waitFor({ state: 'attached', timeout: 15000 });
+    const count = await inputs.count();
 
-    await page
-      .locator('button:has-text("Swap"), button:has-text("Generate"), button:has-text("Tukar")')
-      .first()
-      .click({ timeout: 10000 });
+    for (let i = 0; i < count; i++) {
+      const buf = i === 0 ? buf1 : buf2;
+      await inputs.nth(i).setInputFiles({
+        name: `img${i + 1}.jpg`,
+        mimeType: 'image/jpeg',
+        buffer: buf,
+      });
+      await page.waitForTimeout(800);
+    }
 
-    const dl = Date.now() + 20000;
+    // Tunggu tombol enabled
+    await page.waitForFunction(
+      () => {
+        const btn = document.querySelector('button.el-button--primary.w-100');
+        return btn && !btn.disabled && !btn.classList.contains('is-disabled');
+      },
+      { timeout: 45000 }
+    );
+
+    await page.locator('button.el-button--primary.w-100').first().click({ timeout: 15000 });
+
+    const dl = Date.now() + 25000;
     while ((!taskId || !nonce) && Date.now() < dl) await page.waitForTimeout(400);
     if (!taskId) throw new Error('task_id timeout');
 
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    // Tutup browser DULU — bebas resource sebelum polling
+    // Tutup browser DULU sebelum polling
     await browser.close();
     browser = null;
 
-    // Polling pure-fetch (tanpa browser)
     const started = Date.now();
     let attempt = 0;
     let resultUrl = null;
