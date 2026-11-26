@@ -1,51 +1,22 @@
 import { chromium as pwChromium } from 'playwright-core';
-import chromium from '@sparticuz/chromium';
-
-// Matikan graphics mode & set headless minimum
-chromium.setGraphicsMode = false;
-chromium.setHeadlessMode = true;
 
 export async function launchBrowser() {
-  return pwChromium.launch({
-    args: [
-      ...chromium.args,
-      // ── Hemat memori ─────────────────────────
-      '--single-process',
-      '--no-zygote',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-software-rasterizer',
-      '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-breakpad',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-sync',
-      '--metrics-recording-only',
-      '--mute-audio',
-      '--no-first-run',
-      '--safebrowsing-disable-auto-update',
-      '--js-flags=--max-old-space-size=512',
-      // ── Block resource berat ─────────────────
-      '--blink-settings=imagesEnabled=true',
-      '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints',
-      '--disable-ipc-flooding-protection',
-    ],
-    executablePath: await chromium.executablePath(),
-    headless: true,
-  });
+  const token = process.env.BROWSERLESS_TOKEN;
+  if (!token) throw new Error('BROWSERLESS_TOKEN belum diset di Environment Variables');
+
+  return pwChromium.connectOverCDP(
+    `wss://chrome.browserless.io?token=${token}&--disable-dev-shm-usage&--disable-gpu`
+  );
 }
 
-// Blok resource yang tidak perlu → hemat RAM & bandwidth
 export async function setupPage(ctx) {
   const page = await ctx.newPage();
+
+  // Block resource berat → hemat bandwidth & waktu
   await page.route('**/*', route => {
     const type = route.request().resourceType();
-    if (['font', 'media', 'stylesheet'].includes(type)) {
-      return route.abort();
-    }
-    // Block tracker/analytics
+    if (['font', 'media'].includes(type)) return route.abort();
+
     const url = route.request().url();
     if (
       url.includes('google-analytics') ||
@@ -58,5 +29,6 @@ export async function setupPage(ctx) {
     }
     return route.continue();
   });
+
   return page;
 }
