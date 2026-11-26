@@ -1,7 +1,7 @@
 import { launchBrowser, setupPage } from './_lib/browser.js';
 import { apiCall } from './_lib/http.js';
 
-export const config = { runtime: 'nodejs', memory: 2048, maxDuration: 60 };
+export const config = { runtime: 'nodejs', memory: 1024, maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
@@ -9,16 +9,19 @@ export default async function handler(req, res) {
   const { imageBase64, maxWaitMs = 45000 } = req.body || {};
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 wajib' });
 
-  let browser, ctx;
+  let browser;
   try {
     browser = await launchBrowser();
-    ctx = await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
-      locale: 'id-ID',
-      timezoneId: 'Asia/Jakarta',
-      viewport: { width: 412, height: 915 },
-    });
+
+    const ctx =
+      browser.contexts()[0] ||
+      (await browser.newContext({
+        userAgent:
+          'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+        locale: 'id-ID',
+        timezoneId: 'Asia/Jakarta',
+        viewport: { width: 412, height: 915 },
+      }));
 
     const page = await setupPage(ctx);
 
@@ -63,11 +66,11 @@ export default async function handler(req, res) {
     const cookies = await ctx.cookies('https://aifaceswap.io');
     const keyId = cookies.find(c => c.name === 'key_id')?.value;
 
-    // Tutup browser DULU — bebas RAM sebelum polling
-    await ctx.close();
+    // Tutup browser DULU — bebas resource sebelum polling
     await browser.close();
-    ctx = browser = null;
+    browser = null;
 
+    // Polling pure-fetch (tanpa browser)
     const started = Date.now();
     let attempt = 0;
     let resultUrl = null;
@@ -98,7 +101,6 @@ export default async function handler(req, res) {
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
   } finally {
-    if (ctx) await ctx.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
   }
 }
