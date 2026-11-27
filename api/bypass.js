@@ -20,26 +20,42 @@ export default async function handler(req, res) {
     const ctx = browser.contexts()[0] || (await browser.newContext());
     const page = await ctx.newPage();
 
-    // 1. Buka web bypass.city
+    // 1. Buka web bypass.city (tunggu sampai network selesai loading)
     await page.goto('https://bypass.city/', { waitUntil: 'domcontentloaded', timeout: 8000 });
 
-    // 2. Cari kolom input KHUSUS TEXT/URL/TEXTAREA (hindari checkbox)
-    const input = page.locator('input[type="text"], input[type="url"], textarea').first();
-    
-    await input.waitFor({ state: 'attached', timeout: 3000 });
-    await input.fill(url, { force: true });
+    // 2. Tunggu elemen input pertama muncul di DOM
+    await page.waitForSelector('input', { timeout: 4000 });
 
-    // 3. Siapin penangkap response sebelum tombol diklik
+    // 3. Cari input yang tipenya TEXT atau URL, lalu isi
+    const inputs = page.locator('input');
+    const count = await inputs.count();
+    let filled = false;
+
+    for (let i = 0; i < count; i++) {
+      const el = inputs.nth(i);
+      const type = await el.getAttribute('type');
+      
+      // Lewati checkbox/radio/hidden, isi yang text/url/ga ada tipe
+      if (type !== 'checkbox' && type !== 'radio' && type !== 'hidden' && type !== 'submit') {
+        await el.fill(url, { force: true });
+        filled = true;
+        break;
+      }
+    }
+
+    if (!filled) throw new Error('Gagal menemukan kolom input URL');
+
+    // 4. Siapin penangkap response
     const responsePromise = page.waitForResponse(
       r => r.url().includes('api2.bypass.city/bypass'),
-      { timeout: 8000 }
+      { timeout: 4000 }
     );
 
-    // 4. Klik tombol Bypass
+    // 5. Klik tombol Bypass
     const btn = page.locator('button:has-text("Bypass"), button[type="submit"]').first();
     await btn.click({ force: true, timeout: 3000 });
 
-    // 5. Tunggu hasil bypass dari server
+    // 6. Tunggu hasil bypass
     const apiRes = await responsePromise;
     const data = await apiRes.json();
 
