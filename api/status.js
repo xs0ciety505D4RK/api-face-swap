@@ -24,42 +24,33 @@ export default async function handler(req, res) {
     try {
       data = JSON.parse(text);
     } catch {
-      return res.status(500).json({ ok: false, error: 'Remaker return invalid JSON', raw_text: text });
+      return res.status(500).json({ ok: false, error: 'Remaker return invalid JSON' });
     }
     
-    // --- FUNGSI PENCARI URL OTOMATIS ---
-    // Mencari string apa pun yang dimulai dengan "http" di dalam objek JSON
     function findUrl(obj) {
       if (!obj) return null;
       if (typeof obj === 'string' && obj.startsWith('http')) return obj;
       if (Array.isArray(obj)) {
-        for (let item of obj) {
-          const res = findUrl(item);
-          if (res) return res;
-        }
+        for (let item of obj) { const res = findUrl(item); if (res) return res; }
       } else if (typeof obj === 'object') {
-        for (let key in obj) {
-          const res = findUrl(obj[key]);
-          if (res) return res;
-        }
+        for (let key in obj) { const res = findUrl(obj[key]); if (res) return res; }
       }
       return null;
     }
 
     const output = findUrl(data.result);
 
-    // Jika URL hasil sudah ada
     if (output) {
-      return res.status(200).json({ ok: true, resultUrl: output, raw: data });
+      return res.status(200).json({ ok: true, resultUrl: output });
     }
 
-    // Jika masih diproses (kode 300006 atau belum ada URL)
     if (data?.code === 300006 || data?.code === 100000 || !data?.result) {
-      return res.status(200).json({ ok: false, pending: true, raw: data });
+      return res.status(200).json({ ok: false, pending: true });
     }
 
-    // Gagal
-    return res.status(400).json({ ok: false, error: 'Job failed', raw: data });
+    // Menampilkan pesan error asli dari Remaker
+    const errMsg = data?.message?.en || 'Job failed tanpa alasan';
+    return res.status(400).json({ ok: false, error: errMsg, raw: data });
 
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
