@@ -20,45 +20,28 @@ export default async function handler(req, res) {
     const ctx = browser.contexts()[0] || (await browser.newContext());
     const page = await ctx.newPage();
 
-    // 1. Buka bypass.city
-    await page.goto('https://bypass.city/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+    // 1. Buka web bypass.city
+    await page.goto('https://bypass.city/', { waitUntil: 'domcontentloaded', timeout: 8000 });
 
-    // 2. TANGKAP TOKEN CAPTCHA SAAT DIKIRIM OLEH WEB
-    let captchaToken = null;
-    page.on('response', async (response) => {
-      if (response.url().includes('acecaptcha.com/v1/ace/verify')) {
-        try {
-          const json = await response.json();
-          if (json.token) captchaToken = json.token;
-        } catch (e) {}
-      }
-    });
-
-    // 3. Tunggu sampai token ketangkep (biasanya 3-5 detik)
-    const startTime = Date.now();
-    while (!captchaToken && Date.now() - startTime < 8000) {
-      await page.waitForTimeout(500);
-    }
-
-    if (!captchaToken) throw new Error('Gagal mencuri token Captcha dari browser');
+    // 2. Cari kolom input (pakai selector yang lebih luas)
+    const input = page.locator('input[type="text"], input:not([type="hidden"]), textarea').first();
     
-    // 4. Browser tugasnya selesai, langsung tutup biar cepet
-    await browser.close();
-    browser = null;
+    // Paksa tunggu elemennya nempel di DOM (nggak harus kelihatan sempurna)
+    await input.waitFor({ state: 'attached', timeout: 3000 });
+    await input.fill(url, { force: true });
 
-    // 5. Tembak API bypass pakai fetch (selesai dalam hitungan milidetik)
-    const apiRes = await fetch('https://api2.bypass.city/bypass', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'token': captchaToken,
-        'origin': 'https://bypass.city',
-        'referer': 'https://bypass.city/',
-        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
-      },
-      body: JSON.stringify({ url })
-    });
+    // 3. Siapin penangkap response sebelum tombol diklik
+    const responsePromise = page.waitForResponse(
+      r => r.url().includes('api2.bypass.city/bypass'),
+      { timeout: 8000 }
+    );
 
+    // 4. Klik tombol Bypass
+    const btn = page.locator('button:has-text("Bypass"), button[type="submit"]').first();
+    await btn.click({ force: true, timeout: 3000 });
+
+    // 5. Tunggu hasil bypass dari server
+    const apiRes = await responsePromise;
     const data = await apiRes.json();
 
     if (!data.data) {
