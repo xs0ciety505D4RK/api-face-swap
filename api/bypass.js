@@ -23,10 +23,9 @@ export default async function handler(req, res) {
     // 1. Buka web bypass.city
     await page.goto('https://bypass.city/', { waitUntil: 'domcontentloaded', timeout: 8000 });
 
-    // 2. Cari kolom input (pakai selector yang lebih luas)
-    const input = page.locator('input[type="text"], input:not([type="hidden"]), textarea').first();
+    // 2. Cari kolom input KHUSUS TEXT/URL/TEXTAREA (hindari checkbox)
+    const input = page.locator('input[type="text"], input[type="url"], textarea').first();
     
-    // Paksa tunggu elemennya nempel di DOM (nggak harus kelihatan sempurna)
     await input.waitFor({ state: 'attached', timeout: 3000 });
     await input.fill(url, { force: true });
 
