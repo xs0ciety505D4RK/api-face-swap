@@ -1,6 +1,6 @@
 import { chromium as pwChromium } from 'playwright-core';
 
-export const config = { runtime: 'nodejs', memory: 1024, maxDuration: 60 };
+export const config = { runtime: 'nodejs', memory: 1024, maxDuration: 10 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
@@ -9,51 +9,56 @@ export default async function handler(req, res) {
   if (!url) return res.status(400).json({ error: 'Parameter "url" wajib diisi' });
 
   let browser;
-  let page;
   try {
     const token = process.env.BROWSERLESS_TOKEN;
-    if (!token) throw new Error('BROWSERLESS_TOKEN belum diset di Vercel');
+    if (!token) throw new Error('BROWSERLESS_TOKEN belum diset');
 
     browser = await pwChromium.connectOverCDP(
       `wss://chrome.browserless.io?token=${token}&--disable-dev-shm-usage&--disable-gpu`
     );
 
-    const ctx = browser.contexts()[0] || (await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
-    }));
+    const ctx = browser.contexts()[0] || (await browser.newContext());
+    const page = await ctx.newPage();
+
+    // 1. Buka bypass.city
+    await page.goto('https://bypass.city/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+    // 2. TANGKAP TOKEN CAPTCHA SAAT DIKIRIM OLEH WEB
+    let captchaToken = null;
+    page.on('response', async (response) => {
+      if (response.url().includes('acecaptcha.com/v1/ace/verify')) {
+        try {
+          const json = await response.json();
+          if (json.token) captchaToken = json.token;
+        } catch (e) {}
+      }
+    });
+
+    // 3. Tunggu sampai token ketangkep (biasanya 3-5 detik)
+    const startTime = Date.now();
+    while (!captchaToken && Date.now() - startTime < 8000) {
+      await page.waitForTimeout(500);
+    }
+
+    if (!captchaToken) throw new Error('Gagal mencuri token Captcha dari browser');
     
-    page = await ctx.newPage();
+    // 4. Browser tugasnya selesai, langsung tutup biar cepet
+    await browser.close();
+    browser = null;
 
-    // Buka web bypass.city
-    await page.goto('https://bypass.city/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    
-    // Tunggu token AceCaptcha dihitung otomatis (kasih waktu 6 detik)
-    await page.waitForTimeout(6000);
+    // 5. Tembak API bypass pakai fetch (selesai dalam hitungan milidetik)
+    const apiRes = await fetch('https://api2.bypass.city/bypass', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'token': captchaToken,
+        'origin': 'https://bypass.city',
+        'referer': 'https://bypass.city/',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
+      },
+      body: JSON.stringify({ url })
+    });
 
-    // CARI INPUT DENGAN SELECTOR YANG LEBIH LUAS
-    // Bisa jadi input type="text", type="url", textarea, atau sekadar input tanpa tipe
-    const inputSelector = 'input[type="text"], input[type="url"], input:not([type="hidden"]), textarea';
-    const input = page.locator(inputSelector).first();
-    
-    // Tunggu sampai elemen benar-benar ada di DOM (bukan cuma visible)
-    await input.waitFor({ state: 'attached', timeout: 10000 });
-    
-    // Isi kolom input
-    await input.fill(url);
-    await page.waitForTimeout(500);
-
-    // Siapin penangkap response API
-    const responsePromise = page.waitForResponse(
-      r => r.url().includes('api2.bypass.city/bypass') && r.request().method() === 'POST',
-      { timeout: 30000 }
-    );
-
-    // Klik tombol Bypass
-    const btn = page.locator('button:has-text("Bypass"), button[type="submit"]').first();
-    await btn.click({ timeout: 5000 });
-
-    // Tunggu response dari server
-    const apiRes = await responsePromise;
     const data = await apiRes.json();
 
     if (!data.data) {
@@ -69,24 +74,7 @@ export default async function handler(req, res) {
     });
 
   } catch (e) {
-    // KALAU GAGAL, AMBIL SCREENSHOT & HTML UNTUK DEBUG
-    let debugShot = null;
-    let pageHtml = null;
-    
-    if (page) {
-      try {
-        const shot = await page.screenshot({ type: 'jpeg', quality: 30 });
-        debugShot = 'data:image/jpeg;base64,' + shot.toString('base64');
-        pageHtml = (await page.content()).slice(0, 500); // 500 huruf pertama HTML
-      } catch {}
-    }
-
-    return res.status(500).json({ 
-      ok: false, 
-      error: e.message,
-      screenshot: debugShot, // <-- Ini bakal nampilin screenshot
-      html_snippet: pageHtml
-    });
+    return res.status(500).json({ ok: false, error: e.message });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
